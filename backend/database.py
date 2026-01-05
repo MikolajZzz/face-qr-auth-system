@@ -9,68 +9,31 @@ def get_connection(db_path: str) -> sqlite3.Connection:
     return conn
 
 
-def _get_table_columns(cur: sqlite3.Cursor, table: str) -> set:
-    cur.execute(f"PRAGMA table_info({table})")
-    rows = cur.fetchall() or []
-    return {row["name"] for row in rows}
-
-
-def _table_exists(cur: sqlite3.Cursor, table: str) -> bool:
-    cur.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
-        (table,),
-    )
-    return cur.fetchone() is not None
-
-
-def _ensure_column(cur: sqlite3.Cursor, table: str, column: str, column_type: str) -> None:
-    """
-    SQLite nie wspiera łatwych migracji schematu, ale pozwala dodawać kolumny.
-    Ten helper jest bezpieczny dla istniejącej bazy: dodaje kolumnę tylko, gdy jej brakuje.
-    """
-    cols = _get_table_columns(cur, table)
-    if column in cols:
-        return
-    cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
-
-
 def init_db(db_path: str) -> None:
     conn = get_connection(db_path)
     cur = conn.cursor()
 
-    # --- USERS / PRACOWNICY ---
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            first_name TEXT NOT NULL,
+            last_name TEXT NOT NULL,
             name TEXT NOT NULL,
             qr_code TEXT NOT NULL UNIQUE,
-            face_encoding TEXT NOT NULL
+            qr_expires_at TEXT NOT NULL,
+            face_encoding TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
         );
         """
     )
 
-    # Migracje "pracownicze" (nie wymuszamy NOT NULL, żeby nie psuć istniejących rekordów).
-    _ensure_column(cur, "users", "first_name", "TEXT")
-    _ensure_column(cur, "users", "last_name", "TEXT")
-    _ensure_column(cur, "users", "qr_expires_at", "TEXT")  # ISO string, UTC
-    _ensure_column(cur, "users", "created_at", "TEXT")  # ISO string, UTC
-    _ensure_column(cur, "users", "updated_at", "TEXT")  # ISO string, UTC
-
-    # --- STARE LOGI (zostawiamy dla kompatybilności) ---
     cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            timestamp TEXT NOT NULL,
-            result TEXT NOT NULL,
-            FOREIGN KEY (user_id) REFERENCES users(id)
-        );
-        """
+        "CREATE INDEX IF NOT EXISTS idx_users_qr_code ON users (qr_code)"
     )
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_users_qr_expires_at ON users (qr_expires_at)")
 
-    # --- NOWE ZDARZENIA (wejścia/wyjścia + błędy + obraz próby) ---
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS events (
@@ -82,22 +45,24 @@ def init_db(db_path: str) -> None:
             error_code TEXT,
             qr_code TEXT,
             attempt_image_b64 TEXT,
-            FOREIGN KEY (user_id) REFERENCES users(id)
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
         );
         """
     )
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events (timestamp)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_events_user_id ON events (user_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_events_status ON events (status)")
 
-    # --- KONFIGURACJA ADMINA (hash hasła) ---
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS admin_settings (
             id INTEGER PRIMARY KEY CHECK (id = 1),
-            password_hash TEXT
+            password_hash TEXT NOT NULL
         );
         """
     )
-    # Zapewnij pojedynczy wiersz (id=1)
-    cur.execute("INSERT OR IGNORE INTO admin_settings (id, password_hash) VALUES (1, NULL)")
+    # Zapewnij pojedynczy wiersz (id=1). Pusty string oznacza "hasło jeszcze nie ustawione".
+    cur.execute("INSERT OR IGNORE INTO admin_settings (id, password_hash) VALUES (1, '')")
 
     conn.commit()
     conn.close()
@@ -144,6 +109,10 @@ def create_user(
     """
     first_name = (first_name or "").strip()
     last_name = (last_name or "").strip()
+    if not first_name or not last_name:
+        raise ValueError("Imię i nazwisko są wymagane.")
+    if not qr_expires_at_iso:
+        raise ValueError("Ważność kodu QR jest wymagana.")
     full_name = " ".join([p for p in [first_name, last_name] if p]).strip() or "Pracownik"
 
     tmp_qr = f"TMP:{uuid4().hex}"
@@ -255,49 +224,17 @@ def get_event_by_id(db_path: str, event_id: int) -> Optional[Dict[str, Any]]:
 def get_admin_password_hash(db_path: str) -> Optional[str]:
     conn = get_connection(db_path)
     cur = conn.cursor()
-    # tabela tworzona w init_db, ale db może być "stare" — zabezpieczenie:
-    if not _table_exists(cur, "admin_settings"):
-        conn.close()
-        return None
     cur.execute("SELECT password_hash FROM admin_settings WHERE id = 1")
     row = cur.fetchone()
     conn.close()
     if not row:
         return None
-    return row["password_hash"]
+    return row["password_hash"] or None
 
 
 def set_admin_password_hash(db_path: str, password_hash: str) -> None:
     conn = get_connection(db_path)
     cur = conn.cursor()
-    if not _table_exists(cur, "admin_settings"):
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS admin_settings (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                password_hash TEXT
-            );
-            """
-        )
-        cur.execute("INSERT OR IGNORE INTO admin_settings (id, password_hash) VALUES (1, NULL)")
-
     cur.execute("UPDATE admin_settings SET password_hash = ? WHERE id = 1", (password_hash,))
     conn.commit()
     conn.close()
-
-
-def insert_log(db_path: str, user_id: Optional[int], timestamp, result: str) -> None:
-    """
-    Legacy API: stare części projektu mogą nadal to wywoływać.
-    Zapisujemy do starej tabeli `logs`.
-    """
-    conn = get_connection(db_path)
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO logs (user_id, timestamp, result) VALUES (?, ?, ?)",
-        (user_id, timestamp.isoformat(), result),
-    )
-    conn.commit()
-    conn.close()
-
-

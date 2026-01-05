@@ -7,6 +7,15 @@ const qrInput = document.getElementById("qrInput");
 
 let qrScanInterval = null;
 let scannedQrCode = null;
+// Skanowanie QR jest troche trudne po stronie przeglądarki – robimy je na
+// przeskalowanej klatce, żeby przyspieszyć „pierwsze złapanie” kodu.
+const QR_SCAN_MAX_SIZE = 640; // max dłuższy bok obrazu do analizy QR (nie wpływa na zdjęcia twarzy)
+const QR_SCAN_INTERVAL_MS = 100;
+
+function restartQrScanning() {
+  stopQrScanning();
+  startQrScanning();
+}
 
 async function initCamera() {
   try {
@@ -59,7 +68,12 @@ function startQrScanning() {
     return;
   }
 
-  const ctx = canvas.getContext("2d");
+  let ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) ctx = canvas.getContext("2d");
+  if (!ctx) {
+    setStatus("Nie udało się uruchomić warstwy canvas (2D).", "error");
+    return;
+  }
 
   qrScanInterval = setInterval(() => {
     if (
@@ -70,13 +84,23 @@ function startQrScanning() {
       return;
     }
 
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    // Skanujemy na pomniejszonej klatce – to nie wpływa na captureFrames() - twaze,
+    // bo tam rozdzielczość jest ustawiana osobno.
+    const maxDim = Math.max(video.videoWidth, video.videoHeight);
+    const scale = Math.min(1, QR_SCAN_MAX_SIZE / maxDim);
+    const w = Math.max(1, Math.round(video.videoWidth * scale));
+    const h = Math.max(1, Math.round(video.videoHeight * scale));
 
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    // Nie ustawiaj width/height w każdej iteracji (to czyści canvas i bywa kosztowne)
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+    }
+
+    ctx.drawImage(video, 0, 0, w, h);
 
     try {
-      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const imageData = ctx.getImageData(0, 0, w, h);
       const code = jsQR(imageData.data, imageData.width, imageData.height);
 
       if (code && code.data) {
@@ -92,7 +116,7 @@ function startQrScanning() {
     } catch (e) {
       console.error("Błąd przy odczycie kodu QR:", e);
     }
-  }, 500);
+  }, QR_SCAN_INTERVAL_MS);
 }
 
 function stopQrScanning() {
@@ -138,6 +162,9 @@ async function handleVerification() {
     );
     return;
   }
+
+  // Na wszelki wypadek: nie skanujemy QR w trakcie weryfikacji twarzy
+  stopQrScanning();
 
   setStatus(
     "Nagrywam krótką sekwencję — patrz w kamerę i mrugnij oczami...",
@@ -199,16 +226,14 @@ async function handleVerification() {
         "Gotowe. Teraz możesz zeskanować kolejny kod QR, trzymając go przed kamerą.",
         ""
       );
-      startQrScanning();
+      restartQrScanning();
     }, 3000); // 3 sekund na przeczytanie komunikatu
   }
 }
 
 startBtn.addEventListener("click", handleVerification);
 
-window.addEventListener("load", () => {
+document.addEventListener("DOMContentLoaded", () => {
   initCamera();
   setStatus("Ustaw twarz w ramce i przygotuj się do mrugnięcia.");
 });
-
-

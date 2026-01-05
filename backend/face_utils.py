@@ -1,12 +1,13 @@
 import base64
 import json
-from typing import Dict, Any
+from datetime import datetime
+from typing import Dict, Any, Tuple
 
 import cv2
 import numpy as np
 import face_recognition
 
-from .database import get_connection
+from .database import get_connection, create_user
 
 
 def _decode_base64_to_rgb(b64_string: str) -> np.ndarray:
@@ -88,30 +89,30 @@ def compare_face_with_user(db_path: str, user_row: Dict[str, Any], frame_b64: st
     return distance < 0.6
 
 
-def add_user_with_image(db_path: str, name: str, qr_code: str, image_path: str) -> int:
+def add_user_with_image(
+    db_path: str,
+    first_name: str,
+    last_name: str,
+    image_path: str,
+    qr_expires_at_iso: str,
+) -> Tuple[int, str]:
     """
-    Pomocnicza funkcja do dodawania użytkownika na podstawie
-    pojedynczego zdjęcia na dysku.
-    Zwraca ID nowo dodanego użytkownika.
+    Pomocnicza funkcja (DEV) do dodawania pracownika na podstawie
+    pojedynczego zdjęcia na dysku. Zapisuje w bazie tylko face encoding.
+    Zwraca (ID, payload QR) gdzie payload ma format "EMP:{id}".
     """
     image = face_recognition.load_image_file(image_path)
-    boxes = face_recognition.face_locations(image)
-    encodings = face_recognition.face_encodings(image, boxes)
-    if not encodings:
-        raise ValueError("Nie udało się wyznaczyć wektora twarzy z podanego zdjęcia.")
+    encoding_json = extract_face_encoding_from_rgb(image)
 
-    encoding = encodings[0]
-    encoding_json = json.dumps(encoding.tolist())
-
-    conn = get_connection(db_path)
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO users (name, qr_code, face_encoding) VALUES (?, ?, ?)",
-        (name, qr_code, encoding_json),
+    now_iso = datetime.utcnow().replace(microsecond=0).isoformat()
+    user_id, qr_code = create_user(
+        db_path=db_path,
+        first_name=first_name,
+        last_name=last_name,
+        face_encoding_json=encoding_json,
+        qr_expires_at_iso=qr_expires_at_iso,
+        created_at_iso=now_iso,
     )
-    conn.commit()
-    user_id = cur.lastrowid
-    conn.close()
-    return user_id
+    return user_id, qr_code
 
 
