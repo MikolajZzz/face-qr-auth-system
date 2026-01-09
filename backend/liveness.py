@@ -9,8 +9,12 @@ import mediapipe as mp
 LEFT_EYE_IDX = [33, 160, 158, 133, 153, 144]
 RIGHT_EYE_IDX = [263, 387, 385, 362, 380, 373]
 
-EAR_THRESHOLD = 0.21
-CONSEC_FRAMES_FOR_BLINK = 2
+# Próg EAR poniżej którego oko uznajemy za zamknięte
+EYE_AR_THRESH = 0.21
+# Minimalna liczba kolejnych klatek z zamkniętym okiem, aby uznać to za mrugnięcie
+EYE_AR_CONSEC_FRAMES = 2
+# Minimalna liczba klatek z otwartym okiem przed rozpoczęciem sekwencji mrugania
+MIN_OPEN_FRAMES_BEFORE_BLINK = 2
 
 
 def _decode_base64_image(b64_string: str):
@@ -47,11 +51,17 @@ def _eye_aspect_ratio(landmarks, eye_indices, img_w: int, img_h: int) -> float:
 
 def is_live_from_base64_frames(frames_b64: List[str]) -> bool:
     """
-    Bardzo prosty test żywotności:
-    - Dekoduje serię klatek.
-    - Oblicza EAR (Eye Aspect Ratio) dla lewego i prawego oka.
-    - Jeżeli w sekwencji nastąpi spadek EAR poniżej progu przez kilka klatek,
-      uznajemy to za mrugnięcie -> osoba "żywa".
+    Test żywotności oparty na detekcji mrugania z pełną sekwencją:
+    - Wymaga sekwencji: oko otwarte → zamknięte (min. N klatek) → otwarte
+    - Zabezpiecza przed statycznymi obrazami (wymaga zmian w czasie)
+    - Wykrywa naturalne mrugnięcie w czasie rzeczywistym
+    
+    Stany:
+    - STATE_OPEN: Oko otwarte (oczekiwanie na rozpoczęcie mrugania)
+    - STATE_CLOSING: Oko zaczyna się zamykać
+    - STATE_CLOSED: Oko zamknięte (liczymy klatki)
+    - STATE_OPENING: Oko zaczyna się otwierać (po wymaganym czasie zamknięcia)
+    - STATE_COMPLETE: Pełne mrugnięcie wykryte (otwarte → zamknięte → otwarte)
     """
     decoded_frames = []
     for b64 in frames_b64:
@@ -59,14 +69,23 @@ def is_live_from_base64_frames(frames_b64: List[str]) -> bool:
         if img is not None:
             decoded_frames.append(img)
 
-    if len(decoded_frames) < 3:
-        # za mało klatek, by sensownie ocenić mrugnięcie
+    # Wymagamy minimum 5 klatek, aby mieć szansę na wykrycie pełnej sekwencji mrugania
+    if len(decoded_frames) < 5:
         return False
 
     mp_face_mesh = mp.solutions.face_mesh
 
-    blink_detected = False
-    consec_below = 0
+    # Maszyna stanów dla detekcji mrugania
+    STATE_OPEN = 0          # Oko otwarte - oczekiwanie na rozpoczęcie mrugania
+    STATE_CLOSING = 1       # Oko zaczyna się zamykać
+    STATE_CLOSED = 2        # Oko zamknięte - liczymy klatki
+    STATE_OPENING = 3       # Oko zaczyna się otwierać (po wymaganym czasie)
+    STATE_COMPLETE = 4      # Pełne mrugnięcie wykryte
+
+    state = STATE_OPEN
+    consec_closed_frames = 0  # Licznik klatek z zamkniętym okiem
+    consec_open_frames = 0     # Licznik klatek z otwartym okiem (przed mruganiem)
+    frames_with_face = 0       # Licznik klatek z wykrytą twarzą (zabezpieczenie przed statycznym obrazem)
 
     with mp_face_mesh.FaceMesh(
         static_image_mode=True,
@@ -79,9 +98,14 @@ def is_live_from_base64_frames(frames_b64: List[str]) -> bool:
             result = face_mesh.process(rgb)
 
             if not result.multi_face_landmarks:
-                consec_below = 0
+                # Brak twarzy - resetujemy stan (wymagamy ciągłości)
+                if state != STATE_COMPLETE:
+                    state = STATE_OPEN
+                    consec_closed_frames = 0
+                    consec_open_frames = 0
                 continue
 
+            frames_with_face += 1
             face_landmarks = result.multi_face_landmarks[0].landmark
             h, w, _ = img.shape
 
@@ -89,13 +113,68 @@ def is_live_from_base64_frames(frames_b64: List[str]) -> bool:
             right_ear = _eye_aspect_ratio(face_landmarks, RIGHT_EYE_IDX, w, h)
             ear = (left_ear + right_ear) / 2.0
 
-            if ear < EAR_THRESHOLD:
-                consec_below += 1
-                if consec_below >= CONSEC_FRAMES_FOR_BLINK:
-                    blink_detected = True
-            else:
-                consec_below = 0
+            # Maszyna stanów dla detekcji mrugania
+            if state == STATE_OPEN:
+                # Stan: Oko otwarte - oczekiwanie na rozpoczęcie mrugania
+                if ear >= EYE_AR_THRESH:
+                    consec_open_frames += 1
+                    # Wymagamy minimum N klatek z otwartym okiem przed rozpoczęciem mrugania
+                    # (zabezpieczenie przed rozpoczęciem od zamkniętego oka)
+                    if consec_open_frames >= MIN_OPEN_FRAMES_BEFORE_BLINK:
+                        # Gotowi na wykrycie mrugania
+                        pass
+                else:
+                    # Oko zaczyna się zamykać
+                    if consec_open_frames >= MIN_OPEN_FRAMES_BEFORE_BLINK:
+                        state = STATE_CLOSING
+                        consec_closed_frames = 1
+                    else:
+                        # Za wcześnie - reset (oko nie było wystarczająco długo otwarte)
+                        consec_open_frames = 0
+                        consec_closed_frames = 0
 
-    return blink_detected
+            elif state == STATE_CLOSING:
+                # Stan: Oko zaczyna się zamykać
+                if ear < EYE_AR_THRESH:
+                    consec_closed_frames += 1
+                    if consec_closed_frames >= EYE_AR_CONSEC_FRAMES:
+                        # Oko było zamknięte wystarczająco długo - przechodzimy do stanu zamkniętego
+                        state = STATE_CLOSED
+                else:
+                    # Oko otworzyło się zbyt szybko - to nie było prawdziwe mrugnięcie
+                    state = STATE_OPEN
+                    consec_closed_frames = 0
+                    consec_open_frames = 1
+
+            elif state == STATE_CLOSED:
+                # Stan: Oko zamknięte - oczekiwanie na otwarcie
+                if ear < EYE_AR_THRESH:
+                    consec_closed_frames += 1
+                    # Pozostajemy w stanie zamkniętym
+                else:
+                    # Oko zaczyna się otwierać - przechodzimy do stanu otwierania
+                    state = STATE_OPENING
+                    consec_open_frames = 1
+
+            elif state == STATE_OPENING:
+                # Stan: Oko otwiera się po mrugnięciu
+                if ear >= EYE_AR_THRESH:
+                    consec_open_frames += 1
+                    # Oko jest otwarte - mrugnięcie zakończone!
+                    if consec_open_frames >= MIN_OPEN_FRAMES_BEFORE_BLINK:
+                        state = STATE_COMPLETE
+                else:
+                    # Oko znowu się zamknęło - reset (nieprawidłowa sekwencja)
+                    state = STATE_OPEN
+                    consec_closed_frames = 1
+                    consec_open_frames = 0
+
+            elif state == STATE_COMPLETE:
+                # Stan: Pełne mrugnięcie wykryte - nie zmieniamy stanu
+                pass
+
+    # Weryfikacja: wymagamy wykrycia pełnej sekwencji ORAZ minimum kilku klatek z twarzą
+    # (zabezpieczenie przed statycznym obrazem - wymagamy zmian w czasie)
+    return state == STATE_COMPLETE and frames_with_face >= 5
 
 

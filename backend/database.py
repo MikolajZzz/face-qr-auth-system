@@ -1,6 +1,7 @@
 import sqlite3
 from typing import Optional, Dict, Any, List, Tuple
 from uuid import uuid4
+from datetime import datetime
 
 
 def get_connection(db_path: str) -> sqlite3.Connection:
@@ -238,3 +239,40 @@ def set_admin_password_hash(db_path: str, password_hash: str) -> None:
     cur.execute("UPDATE admin_settings SET password_hash = ? WHERE id = 1", (password_hash,))
     conn.commit()
     conn.close()
+
+
+def update_user_qr_expires_at(db_path: str, user_id: int, qr_expires_at_iso: str) -> bool:
+    """
+    Aktualizuje datę wygaśnięcia kodu QR użytkownika.
+    Zwraca True jeśli użytkownik został zaktualizowany, False jeśli nie znaleziono.
+    """
+    conn = get_connection(db_path)
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE users SET qr_expires_at = ?, updated_at = ? WHERE id = ?",
+        (qr_expires_at_iso, _utcnow_iso(), user_id),
+    )
+    affected = cur.rowcount
+    conn.commit()
+    conn.close()
+    return affected > 0
+
+
+def delete_user(db_path: str, user_id: int) -> bool:
+    """
+    Usuwa użytkownika z bazy danych.
+    Zwraca True jeśli użytkownik został usunięty, False jeśli nie znaleziono.
+    Uwaga: zdarzenia (events) pozostają w bazie, ale user_id będzie NULL (ON DELETE SET NULL).
+    """
+    conn = get_connection(db_path)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    affected = cur.rowcount
+    conn.commit()
+    conn.close()
+    return affected > 0
+
+
+def _utcnow_iso() -> str:
+    """Pomocnicza funkcja do generowania aktualnego czasu w formacie ISO."""
+    return datetime.utcnow().replace(microsecond=0).isoformat()

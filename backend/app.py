@@ -23,6 +23,8 @@ from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 
 from .database import (
     init_db,
@@ -35,6 +37,8 @@ from .database import (
     get_event_by_id,
     get_admin_password_hash,
     set_admin_password_hash,
+    update_user_qr_expires_at,
+    delete_user,
 )
 from .liveness import is_live_from_base64_frames
 from .face_utils import (
@@ -383,6 +387,49 @@ def create_app():
             download_name=f"qr_pracownik_{user_id}.png",
         )
 
+    @app.route("/admin/employees/<int:user_id>/expires_at", methods=["POST"])
+    @admin_required
+    def admin_employee_update_expires_at(user_id: int):
+        db_path_local = app.config["DATABASE_PATH"]
+        user = get_user_by_id(db_path_local, user_id)
+        if not user:
+            return jsonify({"status": "error", "message": "Nie znaleziono użytkownika."}), 404
+
+        data = request.get_json(silent=True) or {}
+        expires_date = (data.get("qr_expires_at") or "").strip()  # YYYY-MM-DD
+
+        if not expires_date:
+            return jsonify({"status": "error", "message": "Data wygaśnięcia jest wymagana."}), 400
+
+        try:
+            qr_expires_at_iso = _date_to_iso_end(expires_date)
+            success = update_user_qr_expires_at(db_path_local, user_id, qr_expires_at_iso)
+            if success:
+                flash(f"Zaktualizowano datę wygaśnięcia QR dla pracownika ID {user_id}.", "success")
+                return jsonify({"status": "success", "message": "Data wygaśnięcia została zaktualizowana."})
+            else:
+                return jsonify({"status": "error", "message": "Nie udało się zaktualizować daty."}), 500
+        except Exception as e:
+            return jsonify({"status": "error", "message": str(e)}), 400
+
+    @app.route("/admin/employees/<int:user_id>/delete", methods=["POST"])
+    @admin_required
+    def admin_employee_delete(user_id: int):
+        db_path_local = app.config["DATABASE_PATH"]
+        user = get_user_by_id(db_path_local, user_id)
+        if not user:
+            return jsonify({"status": "error", "message": "Nie znaleziono użytkownika."}), 404
+
+        try:
+            success = delete_user(db_path_local, user_id)
+            if success:
+                flash(f"Usunięto pracownika ID {user_id} ({user.get('name', '')}).", "success")
+                return jsonify({"status": "success", "message": "Użytkownik został usunięty."})
+            else:
+                return jsonify({"status": "error", "message": "Nie udało się usunąć użytkownika."}), 500
+        except Exception as e:
+            return jsonify({"status": "error", "message": str(e)}), 500
+
     @app.route("/admin/reports", methods=["GET"])
     @admin_required
     def admin_reports():
@@ -414,6 +461,17 @@ def create_app():
 
         events = list_events(db_path_local, start_iso=start_iso, end_iso=end_iso)
 
+        # Rejestracja fontów z obsługą polskich znaków (Windows)
+        # Jeśli font nie istnieje, ReportLab zgłosi błąd przy pierwszym użyciu.
+        try:
+            pdfmetrics.registerFont(TTFont("Arial", r"C:\Windows\Fonts\arial.ttf"))
+        except Exception:
+            pass
+        try:
+            pdfmetrics.registerFont(TTFont("Arial-Bold", r"C:\Windows\Fonts\arialbd.ttf"))
+        except Exception:
+            pass
+
         buf = BytesIO()
         c = pdf_canvas.Canvas(buf, pagesize=A4)
         page_w, page_h = A4
@@ -421,32 +479,54 @@ def create_app():
         top = page_h - 18 * mm
         y = top
 
-        c.setFont("Helvetica-Bold", 14)
+        # Nagłówek raportu
+        font_title = "Arial-Bold" if "Arial-Bold" in pdfmetrics.getRegisteredFontNames() else "Helvetica-Bold"
+        font_text = "Arial" if "Arial" in pdfmetrics.getRegisteredFontNames() else "Helvetica"
+
+        c.setFont(font_title, 14)
         c.drawString(left, y, "Raport wejść / wyjść (QR + twarz)")
         y -= 8 * mm
-        c.setFont("Helvetica", 10)
+        c.setFont(font_text, 10)
         zakres = f"{start_date or '-'} — {end_date or '-'}"
         c.drawString(left, y, f"Zakres: {zakres}")
         y -= 10 * mm
 
-        c.setFont("Helvetica", 9)
+        # Nagłówek kolumn
+        c.setFont(font_text, 9)
+        header_line = "Data / godzina | Status | Kierunek | ID pracownika | Pracownik | Kod błędu"
+        c.drawString(left, y, header_line)
+        y -= 6 * mm
+
+        c.setFont(font_text, 9)
 
         for ev in events:
             ts = ev.get("timestamp") or ""
+            # Format daty: dd mm rrrr hh:mm:ss
+            ts_formatted = ts
+            if ts:
+                try:
+                    dt = datetime.fromisoformat(ts)
+                    ts_formatted = dt.strftime("%d %m %Y %H:%M:%S")
+                except Exception:
+                    # Jeśli nie uda się sparsować, zostawiamy oryginalny tekst
+                    ts_formatted = ts
             status = ev.get("status") or ""
             direction = ev.get("direction") or ""
             uid = ev.get("user_id")
             uname = ev.get("user_name") or "-"
             err = ev.get("error_code") or ""
 
-            line = f"{ts} | {status} | {direction} | ID: {uid if uid is not None else '-'} | {uname}"
+            line = f"{ts_formatted} | {status} | {direction} | ID: {uid if uid is not None else '-'} | {uname}"
             if status == "FAIL" and err:
                 line += f" | BŁĄD: {err}"
 
             if y < 25 * mm:
                 c.showPage()
                 y = top
-                c.setFont("Helvetica", 9)
+                c.setFont(font_text, 9)
+                # Nagłówek kolumn na każdej nowej stronie
+                c.drawString(left, y, header_line)
+                y -= 6 * mm
 
             # Proste zawijanie (2 linie maks)
             max_chars = 110
@@ -469,8 +549,12 @@ def create_app():
                     if y - img_h < 25 * mm:
                         c.showPage()
                         y = top
-                        c.setFont("Helvetica", 9)
+                        # Ustaw font z obsługą polskich znaków + nagłówek kolumn na nowej stronie
+                        c.setFont(font_text, 9)
+                        c.drawString(left, y, header_line)
+                        y -= 6 * mm
 
+                    c.setFont(font_text, 9)
                     c.drawString(left, y, f"Zdjęcie próby ({mime}):")
                     y -= 5.5 * mm
                     c.drawImage(
@@ -508,7 +592,34 @@ def create_app():
 
 
 if __name__ == "__main__":
+    import ssl
+    
+    # Import generate_cert - próbuj relatywny, jeśli nie działa - bezwzględny
+    try:
+        from .generate_cert import generate_self_signed_cert
+    except ImportError:
+        from generate_cert import generate_self_signed_cert
+    
     app = create_app()
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    
+    # Sprawdź czy certyfikaty istnieją, jeśli nie - wygeneruj je
+    base_dir = os.path.abspath(os.path.dirname(__file__))
+    cert_path = os.path.join(base_dir, 'cert.pem')
+    key_path = os.path.join(base_dir, 'key.pem')
+    
+    if not os.path.exists(cert_path) or not os.path.exists(key_path):
+        print("🔐 Certyfikaty SSL nie zostały znalezione. Generowanie...")
+        cert_path, key_path = generate_self_signed_cert(force=True)
+        if not cert_path or not key_path:
+            print("❌ Nie udało się wygenerować certyfikatów. Uruchamiam serwer bez HTTPS.")
+            app.run(host="0.0.0.0", port=5000, debug=True)
+        else:
+            print(f"✅ Uruchamianie serwera HTTPS na porcie 5000...")
+            print(f"   URL: https://localhost:5000")
+            app.run(host="0.0.0.0", port=5000, debug=True, ssl_context=(cert_path, key_path))
+    else:
+        print(f"✅ Uruchamianie serwera HTTPS na porcie 5000...")
+        print(f"   URL: https://localhost:5000")
+        app.run(host="0.0.0.0", port=5000, debug=True, ssl_context=(cert_path, key_path))
 
 

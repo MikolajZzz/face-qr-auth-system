@@ -1,7 +1,8 @@
-Flask
-face-recognition
-opencv-python
-mediapipe
-numpy
-qrcode[pil]
-reportlab
+Flask==3.1.2
+face-recognition==1.3.0
+opencv-python==4.12.0.88
+mediapipe==0.10.14
+numpy==2.2.6
+qrcode[pil]==8.2
+reportlab==4.4.7
+cryptography==46.0.3

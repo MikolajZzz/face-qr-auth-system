@@ -45,7 +45,7 @@
       </div>
 
       <label class="label" for="qr_expires_at">Ważność QR do (np. koniec umowy)</label>
-      <input class="input" id="qr_expires_at" name="qr_expires_at" type="date" required />
+      <input class="input" id="qr_expires_at" name="qr_expires_at" type="date" max="9999-12-31" required />
 
       <div class="divider"></div>
 
@@ -93,15 +93,50 @@
         </thead>
         <tbody>
           {% for u in users %}
-          <tr>
+          <tr id="user-row-{{ u.id }}">
             <td class="mono">{{ u.id }}</td>
             <td>{{ u.name }}</td>
-            <td class="mono">{{ u.qr_expires_at or "-" }}</td>
+            <td class="mono">
+              <span id="expires-display-{{ u.id }}">{{ u.qr_expires_at or "-" }}</span>
+              <input 
+                type="date" 
+                id="expires-input-{{ u.id }}" 
+                class="input small" 
+                style="display: none; width: auto;"
+                max="9999-12-31"
+                value="{{ u.qr_expires_at[:10] if u.qr_expires_at and u.qr_expires_at|length >= 10 else '' }}"
+              />
+            </td>
             <td class="mono">{{ u.qr_code }}</td>
             <td>
-              <a class="btn small" href="{{ url_for('admin_employee_qr_png', user_id=u.id) }}"
-                >Pobierz QR</a
-              >
+              <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                <a class="btn small" href="{{ url_for('admin_employee_qr_png', user_id=u.id) }}"
+                  >Pobierz QR</a
+                >
+                <button 
+                  class="btn small secondary" 
+                  onclick="editExpiresDate({{ u.id }})"
+                  id="edit-btn-{{ u.id }}"
+                >Edytuj datę</button>
+                <button 
+                  class="btn small secondary" 
+                  onclick="cancelEditExpiresDate({{ u.id }})"
+                  id="cancel-btn-{{ u.id }}"
+                  style="display: none;"
+                >Anuluj</button>
+                <button 
+                  class="btn small secondary" 
+                  onclick="saveExpiresDate({{ u.id }})"
+                  id="save-btn-{{ u.id }}"
+                  style="display: none;"
+                >Zapisz</button>
+                <button 
+                  class="btn small delete-user-btn" 
+                  style="background-color: #dc3545;"
+                  data-user-id="{{ u.id }}"
+                  data-user-name="{{ u.name }}"
+                >Usuń</button>
+              </div>
             </td>
           </tr>
           {% else %}
@@ -114,6 +149,168 @@
     </div>
   </section>
 </div>
+
+<script>
+async function deleteUser(userId, userName) {
+  if (!userId) {
+    console.error('Brak ID użytkownika');
+    alert('Błąd: brak ID użytkownika.');
+    return;
+  }
+
+  if (!confirm(`Czy na pewno chcesz usunąć pracownika "${userName}" (ID: ${userId})?\n\nTa operacja jest nieodwracalna. Zdarzenia związane z tym pracownikiem pozostaną w bazie, ale zostaną odłączone.`)) {
+    return;
+  }
+
+  try {
+    console.log('Usuwanie użytkownika:', userId);
+    const response = await fetch(`/admin/employees/${userId}/delete`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      credentials: 'same-origin'
+    });
+
+    console.log('Odpowiedź serwera:', response.status, response.statusText);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Błąd odpowiedzi:', errorText);
+      try {
+        const errorData = JSON.parse(errorText);
+        alert(errorData.message || 'Nie udało się usunąć użytkownika.');
+      } catch {
+        alert('Błąd serwera: ' + response.status + ' ' + response.statusText);
+      }
+      return;
+    }
+
+    const data = await response.json();
+    console.log('Dane odpowiedzi:', data);
+
+    if (data.status === 'success') {
+      // Usuń wiersz z tabeli
+      const row = document.getElementById(`user-row-${userId}`);
+      if (row) {
+        row.remove();
+      }
+      
+      // Odśwież stronę po krótkiej chwili, aby pokazać flash message
+      setTimeout(() => {
+        window.location.reload();
+      }, 500);
+    } else {
+      alert(data.message || 'Nie udało się usunąć użytkownika.');
+    }
+  } catch (error) {
+    console.error('Błąd podczas usuwania:', error);
+    alert('Wystąpił błąd podczas usuwania użytkownika: ' + error.message);
+  }
+}
+
+// Inicjalizacja event listenerów po załadowaniu DOM
+document.addEventListener('DOMContentLoaded', function() {
+  // Event listenery dla przycisków usuwania
+  const deleteButtons = document.querySelectorAll('.delete-user-btn');
+  deleteButtons.forEach(button => {
+    button.addEventListener('click', function() {
+      const userId = this.getAttribute('data-user-id');
+      const userName = this.getAttribute('data-user-name');
+      deleteUser(parseInt(userId), userName);
+    });
+  });
+});
+
+function editExpiresDate(userId) {
+  const displaySpan = document.getElementById(`expires-display-${userId}`);
+  const input = document.getElementById(`expires-input-${userId}`);
+  const editBtn = document.getElementById(`edit-btn-${userId}`);
+  const cancelBtn = document.getElementById(`cancel-btn-${userId}`);
+  const saveBtn = document.getElementById(`save-btn-${userId}`);
+  
+  if (displaySpan && input && editBtn && cancelBtn && saveBtn) {
+    displaySpan.style.display = 'none';
+    input.style.display = 'inline-block';
+    editBtn.style.display = 'none';
+    cancelBtn.style.display = 'inline-block';
+    saveBtn.style.display = 'inline-block';
+    input.focus();
+  }
+}
+
+function cancelEditExpiresDate(userId) {
+  const displaySpan = document.getElementById(`expires-display-${userId}`);
+  const input = document.getElementById(`expires-input-${userId}`);
+  const editBtn = document.getElementById(`edit-btn-${userId}`);
+  const cancelBtn = document.getElementById(`cancel-btn-${userId}`);
+  const saveBtn = document.getElementById(`save-btn-${userId}`);
+  
+  if (displaySpan && input && editBtn && cancelBtn && saveBtn) {
+    // Przywróć oryginalną wartość
+    const originalDate = displaySpan.textContent.trim();
+    input.value = originalDate.includes('T') ? originalDate.substring(0, 10) : originalDate;
+    
+    displaySpan.style.display = 'inline';
+    input.style.display = 'none';
+    editBtn.style.display = 'inline-block';
+    cancelBtn.style.display = 'none';
+    saveBtn.style.display = 'none';
+  }
+}
+
+async function saveExpiresDate(userId) {
+  const input = document.getElementById(`expires-input-${userId}`);
+  const displaySpan = document.getElementById(`expires-display-${userId}`);
+  const cancelBtn = document.getElementById(`cancel-btn-${userId}`);
+  const saveBtn = document.getElementById(`save-btn-${userId}`);
+  const editBtn = document.getElementById(`edit-btn-${userId}`);
+  
+  if (!input || !input.value) {
+    alert('Proszę wybrać datę wygaśnięcia.');
+    return;
+  }
+
+  try {
+    const response = await fetch(`/admin/employees/${userId}/expires_at`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        qr_expires_at: input.value
+      })
+    });
+
+    const data = await response.json();
+
+    if (response.ok && data.status === 'success') {
+      // Zaktualizuj wyświetlaną datę (format ISO z czasem)
+      const dateValue = input.value;
+      const isoDateTime = dateValue + 'T23:59:59';
+      displaySpan.textContent = isoDateTime;
+      
+      // Przywróć widok
+      displaySpan.style.display = 'inline';
+      input.style.display = 'none';
+      editBtn.style.display = 'inline-block';
+      cancelBtn.style.display = 'none';
+      saveBtn.style.display = 'none';
+      
+      // Odśwież stronę po krótkiej chwili, aby pokazać flash message
+      setTimeout(() => {
+        window.location.reload();
+      }, 500);
+    } else {
+      alert(data.message || 'Nie udało się zaktualizować daty wygaśnięcia.');
+    }
+  } catch (error) {
+    console.error('Błąd:', error);
+    alert('Wystąpił błąd podczas aktualizacji daty wygaśnięcia.');
+  }
+}
+
+</script>
 {% endblock %}
 
 
