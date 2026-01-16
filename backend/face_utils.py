@@ -1,6 +1,5 @@
 import base64
 import json
-from datetime import datetime
 from typing import Dict, Any, Tuple
 
 import cv2
@@ -8,6 +7,7 @@ import numpy as np
 import face_recognition
 
 from .database import get_connection, create_user
+from .time_utils import now_poland_iso
 
 
 def _decode_base64_to_rgb(b64_string: str) -> np.ndarray:
@@ -104,7 +104,7 @@ def add_user_with_image(
     image = face_recognition.load_image_file(image_path)
     encoding_json = extract_face_encoding_from_rgb(image)
 
-    now_iso = datetime.utcnow().replace(microsecond=0).isoformat()
+    now_iso = now_poland_iso()
     user_id, qr_code = create_user(
         db_path=db_path,
         first_name=first_name,

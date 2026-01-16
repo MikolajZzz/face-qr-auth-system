@@ -12,9 +12,9 @@ RIGHT_EYE_IDX = [263, 387, 385, 362, 380, 373]
 # Próg EAR poniżej którego oko uznajemy za zamknięte
 EYE_AR_THRESH = 0.21
 # Minimalna liczba kolejnych klatek z zamkniętym okiem, aby uznać to za mrugnięcie
-EYE_AR_CONSEC_FRAMES = 2
+EYE_AR_CONSEC_FRAMES = 1
 # Minimalna liczba klatek z otwartym okiem przed rozpoczęciem sekwencji mrugania
-MIN_OPEN_FRAMES_BEFORE_BLINK = 2
+MIN_OPEN_FRAMES_BEFORE_BLINK = 1
 
 
 def _decode_base64_image(b64_string: str):

@@ -1,7 +1,7 @@
 import sqlite3
 from typing import Optional, Dict, Any, List, Tuple
 from uuid import uuid4
-from datetime import datetime
+from .time_utils import now_poland_iso
 
 
 def get_connection(db_path: str) -> sqlite3.Connection:
@@ -250,7 +250,7 @@ def update_user_qr_expires_at(db_path: str, user_id: int, qr_expires_at_iso: str
     cur = conn.cursor()
     cur.execute(
         "UPDATE users SET qr_expires_at = ?, updated_at = ? WHERE id = ?",
-        (qr_expires_at_iso, _utcnow_iso(), user_id),
+        (qr_expires_at_iso, _now_iso(), user_id),
     )
     affected = cur.rowcount
     conn.commit()
@@ -273,6 +273,6 @@ def delete_user(db_path: str, user_id: int) -> bool:
     return affected > 0
 
 
-def _utcnow_iso() -> str:
+def _now_iso() -> str:
     """Pomocnicza funkcja do generowania aktualnego czasu w formacie ISO."""
-    return datetime.utcnow().replace(microsecond=0).isoformat()
+    return now_poland_iso()

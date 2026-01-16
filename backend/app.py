@@ -46,13 +46,14 @@ from .face_utils import (
     extract_face_encoding_from_base64_image,
     extract_face_encoding_from_image_bytes,
 )
+from .time_utils import now_poland_iso, now_poland_naive
 
 
 ADMIN_SESSION_KEY = "admin_logged_in"
 
 
-def _utcnow_iso() -> str:
-    return datetime.utcnow().replace(microsecond=0).isoformat()
+def _now_iso() -> str:
+    return now_poland_iso()
 
 
 def _date_to_iso_start(date_str: str) -> str:
@@ -84,21 +85,21 @@ def _decode_data_url_to_bytes(data_url_or_b64: str) -> tuple[str, bytes]:
     return mime, base64.b64decode(b64)
 
 
-def create_app():
+def create_app(db_path: str | None = None):
     base_dir = os.path.abspath(os.path.dirname(__file__))
-    db_path = os.path.join(base_dir, "database.sqlite3")
+    resolved_db_path = db_path or os.path.join(base_dir, "database.sqlite3")
 
     app = Flask(
         __name__,
         template_folder=os.path.join(base_dir, "templates"),
         static_folder=os.path.join(base_dir, "static"),
     )
-    app.config["DATABASE_PATH"] = db_path
+    app.config["DATABASE_PATH"] = resolved_db_path
     # Sesje do panelu admina
     app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(32)
 
     # Ensure DB exists
-    init_db(db_path)
+    init_db(resolved_db_path)
 
     def admin_required(view_func):
         @wraps(view_func)
@@ -123,7 +124,7 @@ def create_app():
             direction = "UNKNOWN"
 
         attempt_image_b64 = frames[-1] if frames else None
-        now_iso = _utcnow_iso()
+        now_iso = _now_iso()
 
         if not qr_code or not frames:
             # Logujemy jako błąd systemowy/niepełne dane (bez user_id)
@@ -203,7 +204,7 @@ def create_app():
         if expires_at:
             try:
                 exp_dt = datetime.fromisoformat(expires_at)
-                if datetime.utcnow() > exp_dt:
+                if now_poland_naive() > exp_dt:
                     insert_event(
                         db_path_local,
                         user["id"],
@@ -335,7 +336,7 @@ def create_app():
             face_file = request.files.get("face_image")
 
             qr_expires_at_iso = _date_to_iso_end(expires_date) if expires_date else None
-            now_iso = _utcnow_iso()
+            now_iso = _now_iso()
 
             try:
                 if face_b64:
