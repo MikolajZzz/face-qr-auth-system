@@ -15,7 +15,7 @@ try:
     from cryptography.hazmat.primitives.asymmetric import rsa
     from cryptography.hazmat.backends import default_backend
 except ImportError:
-    print("❌ Biblioteka 'cryptography' nie jest zainstalowana.")
+    print("   Biblioteka 'cryptography' nie jest zainstalowana.")
     print("   Zainstaluj ją poleceniem: pip install cryptography")
     sys.exit(1)
 
@@ -35,7 +35,7 @@ def generate_self_signed_cert(force=False):
     
     # Sprawdź czy certyfikaty już istnieją
     if not force and (os.path.exists(cert_path) or os.path.exists(key_path)):
-        print("⚠️  Certyfikaty już istnieją!")
+        print("    Certyfikaty już istnieją!")
         if sys.stdin.isatty():  # Tylko jeśli uruchomiono interaktywnie
             response = input("   Czy chcesz je nadpisać? (tak/nie): ").strip().lower()
             if response not in ['tak', 't', 'yes', 'y']:
@@ -46,7 +46,7 @@ def generate_self_signed_cert(force=False):
             print(f"   Używam istniejących certyfikatów.")
             return cert_path, key_path
     
-    print("🔐 Generowanie certyfikatów SSL...")
+    print("   Generowanie certyfikatów SSL...")
     
     # Generuj klucz prywatny
     private_key = rsa.generate_private_key(
@@ -97,10 +97,9 @@ def generate_self_signed_cert(force=False):
     with open(cert_path, 'wb') as f:
         f.write(cert.public_bytes(serialization.Encoding.PEM))
     
-    print(f"✅ Certyfikaty wygenerowane pomyślnie!")
+    print(f"   Certyfikaty wygenerowane pomyślnie!")
     print(f"   Certyfikat: {cert_path}")
     print(f"   Klucz: {key_path}")
-    print(f"\n⚠️  Uwaga: To są self-signed certyfikaty dla lokalnego rozwoju.")
     print(f"   Przeglądarka pokaże ostrzeżenie o bezpieczeństwie - to normalne.")
     print(f"   Po pierwszym wejściu zaakceptuj certyfikat w przeglądarce.")
     
