@@ -119,6 +119,7 @@ Dostępny pod adresem: `https://localhost:5000/admin`
 Projekt zawiera testy jednostkowe w katalogu `tests/`, aby uruchomić testy:
 
 .venv\Scripts\Activate.ps1
+
 python -m pytest
 
 
