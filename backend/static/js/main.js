@@ -126,7 +126,7 @@ function stopQrScanning() {
   }
 }
 
-function captureFrames(durationMs = 2500, fps = 8) {
+function captureFrames(durationMs = 2500, fps = 24) {
   return new Promise((resolve) => {
     const frames = [];
     const intervalMs = 1000 / fps;
