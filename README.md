@@ -123,7 +123,7 @@ Projekt zawiera testy jednostkowe w katalogu `tests/`, aby uruchomić testy:
 python -m pytest
 
 ##  Autorzy
--Mateusz Aleksander
--Mateusz Basta
--Mikołaj Zajdek
+- Mateusz Aleksander 
+- Mateusz Basta 
+- Mikołaj Zajdek 
 
